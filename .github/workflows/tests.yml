@@ -1,0 +1,28 @@
+name: Tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+          cache: pip
+          cache-dependency-path: requirements-dev.lock
+      - name: Install dependencies
+        run: |
+          python -m pip install -r requirements-dev.lock
+          python -m pip install --no-deps -e .
+          python -m playwright install chromium
+      - name: Run local tests
+        run: python -m pytest -q

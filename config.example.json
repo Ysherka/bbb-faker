@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "settings": {
+    "automation_enabled": false,
+    "timezone": "Europe/Samara",
+    "headless": false,
+    "dry_run": true
+  },
+  "people": [
+    {"id": "ivan", "name": "Иван Иванов", "enabled": true},
+    {"id": "petr", "name": "Пётр Петров", "enabled": true}
+  ],
+  "subjects": [
+    {
+      "id": "lecture",
+      "title": "Пример предмета — замените название",
+      "url": "https://bbb.example.org/b/example-room",
+      "adapter": "bbb"
+    }
+  ],
+  "lessons": [
+    {
+      "id": "monday_lecture",
+      "subject_id": "lecture",
+      "person_ids": ["ivan", "petr"],
+      "start": "10:00",
+      "end": "11:30",
+      "weekdays": [0],
+      "valid_from": "2026-10-19",
+      "valid_until": "2026-12-31",
+      "excluded_dates": [],
+      "moves": [],
+      "enabled": true
+    }
+  ]
+}
