@@ -1,5 +1,6 @@
 import os
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -14,7 +15,9 @@ def test_autostart_uses_quoted_paths_and_only_its_own_registry_value(tmp_path, m
     key_path = 'Software\\BBBCompanionTests\\' + tmp_path.name
     monkeypatch.setattr('bbb_companion.desktop.RUN_KEY', key_path)
     monkeypatch.setattr(sys, 'frozen', True, raising=False)
-    monkeypatch.setattr(sys, 'executable', str(tmp_path / 'With spaces' / 'BBBCompanion.exe'))
+    # The command is only stored/read, never executed. Keep its fake EXE path
+    # short so the runner's longer temp directory cannot exhaust the Run limit.
+    monkeypatch.setattr(sys, 'executable', str(Path(tmp_path.anchor) / 'With spaces' / 'BBBCompanion.exe'))
     desktop = Desktop(tmp_path / 'Data with spaces', port=9123)
     try:
         with winreg.CreateKey(winreg.HKEY_CURRENT_USER, key_path) as key:
@@ -28,6 +31,10 @@ def test_autostart_uses_quoted_paths_and_only_its_own_registry_value(tmp_path, m
         assert not desktop.set_autostart(False)['autostart']
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path) as key:
             assert winreg.QueryValueEx(key, 'OtherApp')[0] == 'leave-me'
+        monkeypatch.setattr(sys, 'executable', str(tmp_path / ('x' * 260) / 'BBBCompanion.exe'))
+        with pytest.raises(ValueError, match='слишком длинный'):
+            desktop.set_autostart(True)
+        assert not desktop.status()['autostart']
     finally:
         winreg.DeleteKey(winreg.HKEY_CURRENT_USER, key_path)
 
