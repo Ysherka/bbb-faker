@@ -15,6 +15,7 @@ iniconfig==2.3.1
 opentelemetry-api==1.45.1
 packaging==26.3
 pefile==2024.8.26
+pillow==12.3.0
 playwright==1.62.0
 pluggy==1.7.0
 pydantic==2.14.1
@@ -23,9 +24,11 @@ pyee==13.0.1
 pygments==2.21.0
 pyinstaller==6.22.3
 pyinstaller-hooks-contrib==2026.8
+pystray==0.19.5
 pytest==9.1.1
 pywin32-ctypes==0.2.3
 setuptools==84.0.0
+six==1.17.0
 starlette==1.8.0
 typing-extensions==4.16.0
 typing-inspection==0.4.4

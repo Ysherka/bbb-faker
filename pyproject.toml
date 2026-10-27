@@ -4,10 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bbb-companion"
-version = "0.1.1"
+version = "0.2.0"
 description = "Local Windows scheduler and browser companion for BigBlueButton"
 requires-python = ">=3.11"
-dependencies = ["fastapi>=0.115,<1", "uvicorn>=0.34,<1", "pydantic>=2.10,<3", "playwright>=1.50,<2", "tzdata>=2025.1"]
+dependencies = ["fastapi>=0.115,<1", "uvicorn>=0.34,<1", "pydantic>=2.10,<3", "playwright>=1.50,<2", "tzdata>=2025.1", "pystray>=0.19.5,<0.20; sys_platform == 'win32'", "Pillow>=11,<13; sys_platform == 'win32'"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8,<10", "httpx>=0.28,<1", "pyinstaller>=6,<7"]

@@ -2,12 +2,36 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 import time
 from pathlib import Path
 
 from .demo import Observation
 from .rules import Message
+from .desktop import BrowserWindow
+
+OUTPUT_AUDIO_SCRIPT = """(() => {
+  let muted = __MUTED__;
+  const previous = new WeakMap();
+  function silence(element) {
+    if (!muted || !(element instanceof HTMLMediaElement)) return;
+    if (!previous.has(element)) previous.set(element, element.muted);
+    if (!element.muted) element.muted = true;
+  }
+  function sync() { document.querySelectorAll('audio,video').forEach(silence); }
+  window.__bbbSetOutputMuted = value => {
+    muted = value;
+    document.querySelectorAll('audio,video').forEach(element => {
+      if (muted) silence(element);
+      else if (previous.has(element)) { element.muted = previous.get(element); previous.delete(element); }
+    });
+  };
+  document.addEventListener('volumechange', event => silence(event.target), true);
+  new MutationObserver(sync).observe(document, {childList: true, subtree: true});
+  sync();
+  window.__bbbOutputMuted().then(window.__bbbSetOutputMuted).catch(() => {});
+})()"""
 
 
 class MeetingEnded(RuntimeError):
@@ -25,10 +49,17 @@ class BrowserPool:
             if self.playwright is None:
                 from playwright.async_api import async_playwright
                 self.playwright = await async_playwright().start()
-            browser = self.browsers.get(headless)
+            # Windows uses one headed browser per connection. A hidden native
+            # window can be restored without losing WebRTC/audio/session state.
+            independent = os.name == "nt"
+            key = object() if independent else headless
+            browser = self.browsers.get(key)
             if browser is None or not browser.is_connected():
-                browser = await self.playwright.chromium.launch(headless=headless)
-                self.browsers[headless] = browser
+                browser = await self.playwright.chromium.launch(
+                    headless=False if independent else headless,
+                    args=["--window-position=-32000,-32000"] if independent and headless else [],
+                )
+                self.browsers[key] = browser
             context = await browser.new_context(locale="ru-RU", viewport={"width": 1440, "height": 1000})
             # No microphone/camera permissions are granted.
             context.set_default_timeout(10000)
@@ -60,6 +91,9 @@ class BrowserAdapter:
     def __init__(self, pool: BrowserPool, url: str, name: str, headless: bool):
         self.pool, self.url, self.name, self.headless = pool, url, name, headless
         self.context = self.page = None
+        self.window = None
+        self.browser_visible = not headless
+        self.window_supported = BrowserWindow.supported
         self.seen = set()
         self.seen_order = []
         self.script = Path(__file__).with_name("observe.js").read_text(encoding="utf-8")
@@ -80,7 +114,24 @@ class BrowserAdapter:
 
     async def connect(self):
         self.context = await self.pool.context(self.headless)
+        await self.context.expose_binding("__bbbOutputMuted", lambda source: not self.browser_visible)
+        await self.context.add_init_script(OUTPUT_AUDIO_SCRIPT.replace("__MUTED__", "true" if self.headless else "false"))
         self.page = await self.context.new_page()
+        if self.window_supported:
+            cdp = await self.context.browser.new_browser_cdp_session()
+            try:
+                processes = await cdp.send("SystemInfo.getProcessInfo")
+                pid = next(p["id"] for p in processes["processInfo"] if p["type"] == "browser")
+            finally:
+                await cdp.detach()
+            self.window = BrowserWindow(pid)
+            # The first hidden page starts off screen, so no lecture contents
+            # flash on the desktop before SW_HIDE is applied.
+            for attempt in range(40):
+                if self.window.handles():
+                    break
+                await asyncio.sleep(.05)
+            await self.set_visible(self.browser_visible)
         await self.page.goto(self.url, wait_until="domcontentloaded", timeout=45000)
         self.progress_started = time.monotonic()
         while True:
@@ -91,6 +142,26 @@ class BrowserAdapter:
                 # exact page while Greenlight refreshes/redirects it itself.
                 return False
             await asyncio.sleep(.5)
+
+    async def set_visible(self, visible: bool):
+        if not self.window_supported or not self.window:
+            raise ValueError("Управление окном доступно после запуска Chromium в Windows")
+        if visible:
+            # Hidden launches start off screen; CDP also restores usable bounds.
+            cdp = await self.context.new_cdp_session(self.page)
+            try:
+                info = await cdp.send("Browser.getWindowForTarget")
+                await cdp.send("Browser.setWindowBounds", {"windowId": info["windowId"],
+                               "bounds": {"windowState": "normal"}})
+                await cdp.send("Browser.setWindowBounds", {"windowId": info["windowId"],
+                               "bounds": {"left": 80, "top": 60, "width": 1280, "height": 900}})
+            finally:
+                await cdp.detach()
+        self.window.set_visible(visible)
+        self.browser_visible = visible
+        # The context binding supplies the current value again after navigation.
+        self.headless = not visible
+        await self.page.evaluate("muted => window.__bbbSetOutputMuted?.(muted)", not visible)
 
     async def snapshot(self):
         try:

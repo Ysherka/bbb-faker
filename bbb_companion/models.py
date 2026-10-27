@@ -60,6 +60,8 @@ class Lesson(Model):
     start: Time
     end: Time
     weekdays: list[int] = Field(default_factory=list)
+    interval_weeks: Literal[1, 2] = 1
+    anchor_date: Date | None = None
     date: Date | None = None
     valid_from: Date | None = None
     valid_until: Date | None = None
@@ -71,6 +73,8 @@ class Lesson(Model):
     def check_schedule(self):
         if bool(self.weekdays) == bool(self.date):
             raise ValueError("Укажите либо дни недели, либо дату разового занятия")
+        if self.interval_weeks == 2 and (self.date or not self.anchor_date):
+            raise ValueError("Для занятия раз в две недели укажите опорную дату активной недели")
         if len(set(self.person_ids)) != len(self.person_ids):
             raise ValueError("Люди в занятии не должны повторяться")
         if any(day not in range(7) for day in self.weekdays) or len(set(self.weekdays)) != len(self.weekdays):

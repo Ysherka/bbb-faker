@@ -48,6 +48,8 @@ class Session:
                 "subject_id": self.snapshot["subject"]["id"], "subject": self.snapshot["subject"]["title"],
                 "adapter": self.snapshot["subject"]["adapter"], "state": self.state, "paused": self.paused,
                 "healthy": self.healthy, "listen_only": self.listen_only, "total": self.total,
+                "window_supported": bool(getattr(self.adapter, "window", None)),
+                "browser_visible": bool(getattr(self.adapter, "browser_visible", False)),
                 "start": self.snapshot["start"], "end": self.snapshot["end"], "error": self.error, "warning": self.warning}
 
 
@@ -384,6 +386,15 @@ class Engine:
             self.event(session, "info", "pause", "Повторение сообщений приостановлено" if session.paused else "Повторение сообщений возобновлено")
         elif action == "diagnostics":
             await self.diagnostics(session)
+        elif action in {"show_browser", "hide_browser"}:
+            if not session.adapter or not getattr(session.adapter, "window", None):
+                raise ValueError("Окно этого подключения пока недоступно")
+            async with session.lock:
+                await session.adapter.set_visible(action == "show_browser")
+            # Preserve the user's choice if this session has to reconnect.
+            session.snapshot["settings"]["headless"] = action != "show_browser"
+            self.storage.update_snapshot(session.id, session.snapshot)
+            self.event(session, "info", "browser_visibility", "Окно браузера показано" if action == "show_browser" else "Окно браузера скрыто")
         else:
             raise ValueError("Неизвестная команда")
 

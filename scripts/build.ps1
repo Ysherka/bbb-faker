@@ -1,4 +1,4 @@
-param([switch]$SkipBrowser, [string]$Release = '0.1.1')
+param([switch]$SkipBrowser, [string]$Release = '0.2.0')
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $pythonPath = Join-Path $projectRoot '.venv\Scripts\python.exe'
@@ -13,7 +13,7 @@ Push-Location $projectRoot
 try {
     $staticData = (Join-Path $projectRoot 'bbb_companion\static') + ';bbb_companion/static'
     $observerData = (Join-Path $projectRoot 'bbb_companion\observe.js') + ';bbb_companion'
-    & $pythonPath -m PyInstaller --noconfirm --clean --onedir --console --name BBBCompanion --distpath $releaseRoot --workpath (Join-Path $workRoot 'work') --specpath $workRoot --paths $projectRoot --add-data $staticData --add-data $observerData --collect-data tzdata --collect-all uvicorn launcher.py
+    & $pythonPath -m PyInstaller --noconfirm --clean --onedir --windowed --name BBBCompanion --distpath $releaseRoot --workpath (Join-Path $workRoot 'work') --specpath $workRoot --paths $projectRoot --add-data $staticData --add-data $observerData --collect-data tzdata --collect-all uvicorn --hidden-import pystray._win32 launcher.py
     if ($LASTEXITCODE -ne 0) { throw 'PyInstaller build failed.' }
     if (-not $SkipBrowser) {
         $browserExecutable = & $pythonPath -c "from playwright.sync_api import sync_playwright`nwith sync_playwright() as p:`n    print(p.chromium.executable_path)"

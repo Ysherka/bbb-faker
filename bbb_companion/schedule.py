@@ -22,7 +22,18 @@ def occurs(lesson: Lesson, day: date) -> bool:
         return False
     if lesson.valid_from and day < lesson.valid_from or lesson.valid_until and day > lesson.valid_until:
         return False
-    return lesson.date == day if lesson.date else day.weekday() in lesson.weekdays
+    if lesson.date:
+        return lesson.date == day
+    if day.weekday() not in lesson.weekdays:
+        return False
+    if lesson.interval_weeks == 2:
+        # Align to Monday: all selected weekdays share the same active week,
+        # including dates before the anchor and across year boundaries.
+        anchor = lesson.anchor_date
+        monday = day - timedelta(days=day.weekday())
+        anchor_monday = anchor - timedelta(days=anchor.weekday())
+        return (monday - anchor_monday).days % 14 == 0
+    return True
 
 
 def occurrences(config: Config, start_day: date, days: int = 8) -> list[Occurrence]:

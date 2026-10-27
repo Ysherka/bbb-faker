@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import secrets
+from datetime import date, datetime, timedelta
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Literal
@@ -11,17 +12,31 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+from pydantic import ValidationError
 
 from .engine import Engine
 from .models import Config
+from .desktop import Desktop
+from .schedule import SAMARA, occurrences
 from .storage import Storage
+from .transfer import Bundle, export_bundle, import_bundle, revision
 
 STATIC = Path(__file__).with_name("static")
 
 
 class Command(BaseModel):
     id: str
-    action: Literal["leave", "pause", "diagnostics"]
+    action: Literal["leave", "pause", "diagnostics", "show_browser", "hide_browser"]
+
+
+class ImportCommand(BaseModel):
+    bundle: Bundle
+    mode: Literal["merge", "replace"] = "merge"
+    revision: str | None = None
+
+
+class StartupCommand(BaseModel):
+    enabled: bool
 
 
 class DemoCommand(BaseModel):
@@ -30,10 +45,11 @@ class DemoCommand(BaseModel):
     text: str = Field(default="Здравствуйте", min_length=1, max_length=300)
 
 
-def create_app(data_dir: Path, *, run_engine=True):
+def create_app(data_dir: Path, *, run_engine=True, desktop=None):
     storage = Storage(data_dir)
     engine = Engine(storage)
     token = secrets.token_urlsafe(32)
+    desktop = desktop or Desktop(data_dir)
 
     @asynccontextmanager
     async def lifespan(app):
@@ -51,6 +67,7 @@ def create_app(data_dir: Path, *, run_engine=True):
     app.state.storage = storage
     app.state.token = token
     app.state.shutdown = None
+    app.state.desktop = desktop
 
     @app.middleware("http")
     async def local_access(request: Request, call_next):
@@ -85,6 +102,59 @@ def create_app(data_dir: Path, *, run_engine=True):
     @app.get("/api/status")
     def status():
         return engine.status()
+
+    @app.get("/api/week")
+    def week(start: date | None = None):
+        start = start or datetime.now(SAMARA).date()
+        monday = start - timedelta(days=start.weekday())
+        return {"start": monday.isoformat(), "days": [(monday + timedelta(days=i)).isoformat() for i in range(7)],
+                "lessons": [{"id": o.id, "lesson_id": o.lesson.id, "subject_id": o.lesson.subject_id,
+                             "start": o.start.isoformat(), "end": o.end.isoformat(), "person_ids": o.lesson.person_ids}
+                            for o in occurrences(storage.config, monday, 7) if o.end.date() >= monday]}
+
+    @app.get("/api/desktop")
+    def desktop_status():
+        return desktop.status()
+
+    @app.put("/api/desktop/autostart")
+    def autostart(command: StartupCommand):
+        try:
+            result = desktop.set_autostart(command.enabled)
+        except (ValueError, OSError) as exc:
+            raise HTTPException(400, str(exc)) from exc
+        storage.event("info", "autostart", "Автозапуск включён" if command.enabled else "Автозапуск выключен")
+        return result
+
+    @app.get("/api/export/data")
+    def export_data(sections: str = "people,subjects,lessons"):
+        selected = set(sections.split(","))
+        if not selected or not selected <= {"people", "subjects", "lessons"}:
+            raise HTTPException(400, "Выберите людей, предметы или расписание")
+        bundle = export_bundle(storage.config, selected)
+        return Response(bundle.model_dump_json(indent=2), media_type="application/json",
+                        headers={"Content-Disposition": 'attachment; filename="bbb-schedule.json"'})
+
+    def prepare_import(command):
+        try:
+            return import_bundle(storage.config, command.bundle, command.mode)
+        except (ValueError, ValidationError) as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @app.post("/api/import/preview")
+    def preview_import(command: ImportCommand):
+        with storage.lock:
+            _, counts = prepare_import(command)
+            return {"counts": counts, "revision": revision(storage.config)}
+
+    @app.post("/api/import/data")
+    def apply_import(command: ImportCommand):
+        with storage.lock:
+            if command.revision != revision(storage.config):
+                raise HTTPException(409, "Данные изменились. Обновите предварительный просмотр импорта.")
+            result, counts = prepare_import(command)
+            storage.save_config(result)
+        storage.event("info", "data_imported", "Данные импортированы", details={"mode": command.mode, "counts": counts})
+        return result.model_dump(mode="json")
 
     @app.get("/api/events")
     def events(after: int = Query(0, ge=0), before: int | None = Query(None, ge=1),

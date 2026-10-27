@@ -46,6 +46,7 @@ def test_panel_forms_demo_and_live_log(tmp_path):
                 await page.locator('#add-lesson').click()
                 await page.locator('#editor input[name=person]').check()
                 await page.locator('#editor-form button[type=submit]').click()
+                await page.locator('#view-list').click()
                 await page.locator('#lessons').get_by_text('Тестовый предмет',exact=True).wait_for()
                 # Creating configuration does not enable the scheduler implicitly.
                 assert not app.state.storage.config.settings.automation_enabled

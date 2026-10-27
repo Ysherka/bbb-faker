@@ -26,6 +26,8 @@
       "start": "10:00",
       "end": "11:30",
       "weekdays": [0],
+      "interval_weeks": 2,
+      "anchor_date": "2026-10-26",
       "valid_from": "2026-10-19",
       "valid_until": "2026-12-31",
       "excluded_dates": [],
