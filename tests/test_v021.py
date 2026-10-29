@@ -45,8 +45,8 @@ def test_limit_and_legacy_configuration_upgrade(tmp_path):
     store = Storage(tmp_path)
     try:
         assert store.config.settings.max_connections == 15
-        assert json.loads((tmp_path/'config.json').read_text())['version'] == 2
-        assert json.loads((tmp_path/'config.backup.json').read_text()) == old
+        assert json.loads((tmp_path/'config.json').read_text(encoding='utf-8'))['version'] == 2
+        assert json.loads((tmp_path/'config.backup.json').read_text(encoding='utf-8')) == old
     finally:
         store.close()
 
