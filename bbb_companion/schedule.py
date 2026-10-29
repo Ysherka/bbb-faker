@@ -17,8 +17,8 @@ class Occurrence:
     end: datetime
 
 
-def occurs(lesson: Lesson, day: date) -> bool:
-    if not lesson.enabled:
+def occurs(lesson: Lesson, day: date, *, include_disabled=False) -> bool:
+    if not lesson.enabled and not include_disabled:
         return False
     if lesson.valid_from and day < lesson.valid_from or lesson.valid_until and day > lesson.valid_until:
         return False
@@ -36,7 +36,7 @@ def occurs(lesson: Lesson, day: date) -> bool:
     return True
 
 
-def occurrences(config: Config, start_day: date, days: int = 8) -> list[Occurrence]:
+def occurrences(config: Config, start_day: date, days: int = 8, *, include_disabled=False) -> list[Occurrence]:
     end_day = start_day + timedelta(days=days)
     result = []
     for lesson in config.lessons:
@@ -44,7 +44,7 @@ def occurrences(config: Config, start_day: date, days: int = 8) -> list[Occurren
         sources.update(m.original_date for m in lesson.moves if start_day - timedelta(days=1) <= m.date < end_day)
         moves = {m.original_date: m for m in lesson.moves}
         for original in sources:
-            if not occurs(lesson, original) or original in lesson.excluded_dates:
+            if not occurs(lesson, original, include_disabled=include_disabled) or original in lesson.excluded_dates:
                 continue
             move = moves.get(original)
             day = move.date if move else original

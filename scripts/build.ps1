@@ -1,4 +1,4 @@
-param([switch]$SkipBrowser, [string]$Release = '0.2.1')
+param([switch]$SkipBrowser, [string]$Release = '0.2.2')
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $pythonPath = Join-Path $projectRoot '.venv\Scripts\python.exe'

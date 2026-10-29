@@ -114,8 +114,9 @@ def create_app(data_dir: Path, *, run_engine=True, desktop=None):
         monday = start - timedelta(days=start.weekday())
         return {"start": monday.isoformat(), "days": [(monday + timedelta(days=i)).isoformat() for i in range(7)],
                 "lessons": [{"id": o.id, "lesson_id": o.lesson.id, "subject_id": o.lesson.subject_id,
-                             "start": o.start.isoformat(), "end": o.end.isoformat(), "person_ids": o.lesson.person_ids}
-                            for o in occurrences(storage.config, monday, 7) if o.end.date() >= monday]}
+                             "start": o.start.isoformat(), "end": o.end.isoformat(), "person_ids": o.lesson.person_ids,
+                             "enabled": o.lesson.enabled}
+                            for o in occurrences(storage.config, monday, 7, include_disabled=True) if o.end.date() >= monday]}
 
     @app.get("/api/desktop")
     def desktop_status():

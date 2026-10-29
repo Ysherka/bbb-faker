@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import hashlib
 import unicodedata
 import uuid
-from collections import Counter, deque
+from collections import Counter, defaultdict, deque
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -12,6 +13,11 @@ if TYPE_CHECKING:
 
 def normalize(text: str) -> str:
     return " ".join(unicodedata.normalize("NFKC", text).casefold().split()).rstrip(" .,!?:;…")
+
+
+def identical_key(text: str) -> str:
+    # Punctuation carries meaning in answers (e.g. "да" versus "да?").
+    return " ".join(unicodedata.normalize("NFKC", text).casefold().split())
 
 
 @dataclass(frozen=True)
@@ -31,6 +37,7 @@ class Reaction:
     authors: int
     total: int
     at: float
+    identical: bool = False
 
 
 class ChatDetector:
@@ -41,19 +48,44 @@ class ChatDetector:
         self.seen: set[str] = set()
         self.seen_order: deque[str] = deque()
         self.waves = (saved or {}).get("waves", {})
+        self.identical_waves = (saved or {}).get("identical_waves", {})
 
     def dump(self) -> dict:
-        return {"waves": self.waves}
+        return {"waves": self.waves, "identical_waves": self.identical_waves}
+
+    def identical(self, event: Message) -> str | None:
+        if self.settings.repeat_identical and len(event.text) <= 300 and normalize(event.text) not in self.lookup:
+            return identical_key(event.text) or None
+        return None
+
+    def buckets(self, events):
+        known, identical = defaultdict(list), defaultdict(list)
+        for event in events:
+            group = self.lookup.get(normalize(event.text))
+            if group:
+                known[group].append(event)
+            else:
+                key = self.identical(event)
+                if key:
+                    identical[key].append(event)
+        return known, identical
 
     def progress(self, now: float) -> dict:
         events = [event for event in self.events if event.at >= now - self.settings.window_seconds]
         total = len({event.author for event in events})
+        known, identical = self.buckets(events)
         groups = {}
         for group in self.settings.groups:
-            authors = {event.author for event in events if self.lookup.get(normalize(event.text)) == group}
+            authors = {event.author for event in known[group]}
             groups[group] = {"authors": len(authors), "total": total,
                              "ratio": len(authors) / total if total else 0,
                              "already_answered": bool(self.waves.get(group, {}).get("fired"))}
+        for key, matching in identical.items():
+            authors = {event.author for event in matching}
+            groups["identical:" + hashlib.sha256(key.encode()).hexdigest()] = {
+                "label": f"Одинаковый ответ «{key}»", "authors": len(authors), "total": total,
+                "ratio": len(authors) / total if total else 0,
+                "already_answered": bool(self.identical_waves.get(key, {}).get("fired"))}
         return groups
 
     def add(self, message: Message, own_ids: set[str], own_names: set[str]) -> list[Reaction]:
@@ -68,26 +100,33 @@ class ChatDetector:
         now = message.at
         while self.events and self.events[0].at < now - self.settings.window_seconds:
             self.events.popleft()
+        self.identical_waves = {key: wave for key, wave in self.identical_waves.items()
+                                if now - wave["last"] < self.settings.quiet_seconds}
         group = self.lookup.get(normalize(message.text))
-        if group:
-            wave = self.waves.get(group)
+        identical = self.identical(message)
+        collection, key = (self.waves, group) if group else (self.identical_waves, identical)
+        if key:
+            wave = collection.get(key)
             if not wave or now - wave["last"] >= self.settings.quiet_seconds:
                 wave = {"id": uuid.uuid4().hex, "last": now, "fired": False, "start": now}
-                self.waves[group] = wave
+                collection[key] = wave
             wave["last"] = now
         self.events.append(message)
         total = len({event.author for event in self.events})
         reactions = []
-        for name, wave in self.waves.items():
+        known, identical_matches = self.buckets(self.events)
+        candidates = [(name, wave, False) for name, wave in self.waves.items()]
+        candidates += [(name, wave, True) for name, wave in self.identical_waves.items()]
+        for name, wave, dynamic in candidates:
             if wave["fired"] or now - wave["last"] >= self.settings.quiet_seconds:
                 continue
-            matching = [event for event in self.events if event.at >= wave["start"] and self.lookup.get(normalize(event.text)) == name]
+            matching = [event for event in (identical_matches if dynamic else known).get(name, []) if event.at >= wave["start"]]
             # One most recent vote per author; repeated messages cannot skew the selected text.
             votes = {event.author: event.text for event in matching}
             if len(votes) >= self.settings.min_authors and len(votes) / total >= self.settings.author_ratio:
                 text = Counter(votes.values()).most_common(1)[0][0]
                 wave["fired"] = True
-                reactions.append(Reaction(wave["id"], name, text, len(votes), total, now))
+                reactions.append(Reaction(wave["id"], "Одинаковый ответ" if dynamic else name, text, len(votes), total, now, identical=dynamic))
         return reactions
 
 

@@ -21,7 +21,7 @@ from zoneinfo import ZoneInfo
 def main():
     root=Path(__file__).resolve().parent.parent
     parser=argparse.ArgumentParser()
-    parser.add_argument('--exe',type=Path,default=root/'dist'/'releases'/'0.2.1'/'BBBCompanion'/'BBBCompanion.exe')
+    parser.add_argument('--exe',type=Path,default=root/'dist'/'releases'/'0.2.2'/'BBBCompanion'/'BBBCompanion.exe')
     parser.add_argument('--legacy',action='store_true')
     parser.add_argument('--profiles',type=int,default=15)
     args=parser.parse_args()
@@ -37,7 +37,7 @@ def main():
     # confirmed entry. A fixed timer can fire during a cold EXE startup.
     fixture=fixture.replace('</script>',"""async function waitForWave(){
       const ready=await (await fetch('/wave-state')).text();
-      if(ready==='1'){for(let i=0;i<6;i++)post('External '+i,'+');}
+      if(ready==='1'){for(let i=0;i<6;i++)post('External '+i,'42');}
       else setTimeout(waitForWave,200);
     }waitForWave();</script>""")
     class Handler(BaseHTTPRequestHandler):
@@ -103,6 +103,7 @@ def main():
             if not connected or not sent:
                 raise AssertionError(f'Frozen browser check failed: connected={connected}, sent={sent}')
             assert not any(e['kind']=='tray_error' for e in events), 'Native tray failed to start'
+            assert any(e['kind']=='wave' and e['message'].startswith('Одинаковый ответ') for e in events)
             assert len(status['subject_browsers'])==len(assignments)
             session=next(s for s in status['sessions'] if s['state']=='active')
             assert session['window_supported'] and not session['browser_visible']
@@ -129,13 +130,34 @@ def main():
                     button.click()
                     expect(button).to_have_attribute('data-visible','true')
                     panel.screenshot(path=str(directory/'subject-browsers.png'),full_page=True)
+                    panel.locator('a[data-page=schedule]').click()
+                    panel.locator('#add-lesson').click()
+                    panel.locator('#editor select[name=repeat]').select_option('once')
+                    panel.locator('#editor input[name=date]').fill(now.date().isoformat())
+                    panel.locator('#editor [data-quick=subject]').click()
+                    panel.locator('#quick-editor input[name=title]').fill('Inline subject')
+                    panel.locator('#quick-editor input[name=url]').fill('demo://inline')
+                    panel.locator('#quick-editor select[name=adapter]').select_option('demo')
+                    panel.locator('#quick-form [type=submit]').click()
+                    expect(panel.locator('#quick-editor')).not_to_be_visible()
+                    panel.locator('#editor [data-quick=person]').click()
+                    panel.locator('#quick-editor input[name=name]').fill('Inline person')
+                    panel.locator('#quick-form [type=submit]').click()
+                    expect(panel.locator('#quick-editor')).not_to_be_visible()
+                    panel.locator('#editor input[name=enabled]').uncheck()
+                    panel.locator('#editor-form [type=submit]').click()
+                    expect(panel.locator('#editor')).not_to_be_visible()
+                    expect(panel.locator('.week-lesson.disabled-lesson')).to_have_count(1)
+                    expect(panel.locator('.lesson-disabled-label')).to_have_text('Выключено')
+                    assert not any(item['subject_id'] not in {'local','other'} for item in json.loads(get('/api/status'))['upcoming'])
+                    panel.screenshot(path=str(directory/'disabled-lesson.png'),full_page=True)
                 finally:
                     browser.close()
             request=urllib.request.Request(address+'/api/shutdown',data=b'{}',headers={'Content-Type':'application/json','X-App-Token':token})
             urllib.request.urlopen(request,timeout=5).close()
             process.wait(timeout=15)
             assert process.returncode==0
-        print(f'Frozen EXE: {args.profiles} profiles, {len(assignments)} subjects, tray, listen-only, chat replies, subject window API/panel and shutdown OK')
+        print(f'Frozen EXE: {args.profiles} profiles, {len(assignments)} subjects, generic answers, inline creation, disabled lesson, subject windows and shutdown OK')
         print(directory)
     except Exception:
         if (directory/'process.log').exists():

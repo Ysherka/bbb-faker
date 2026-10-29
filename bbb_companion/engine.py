@@ -311,6 +311,7 @@ class Engine:
             room.leave.reset_observation()
         if room.owner != session.id:
             return
+        room.chat.settings.repeat_identical = any(s.settings.chat.repeat_identical for s in members)
         own_ids = {s.own_id for s in members if s.own_id}
         own_names = {normalize(s.snapshot["person"]["name"]) for s in self.sessions.values() if s.room_key == session.room_key}
         received = [message for message in observation.messages if message.author not in own_ids and normalize(message.name) not in own_names]
@@ -320,6 +321,8 @@ class Engine:
                 # Persist before sending, so a restart cannot repeat this wave.
                 self.storage.save_room(session.room_key, room.chat.dump())
                 for target in eligible:
+                    if reaction.identical and not target.settings.chat.repeat_identical:
+                        continue
                     if target.paused or target.joined_at > reaction.at or target.finish_reason:
                         continue
                     if not self.storage.claim_send(target.id, reaction.id, reaction.text):
@@ -341,8 +344,8 @@ class Engine:
             self.storage.save_room(session.room_key, room.chat.dump())
         if received:
             progress = room.chat.progress(time.time())
-            summary = "; ".join(f"{group}: {item['authors']}/{item['total']} ({item['ratio']:.0%})" for group, item in progress.items() if item["authors"])
-            self.event(session, "info", "chat_observed", f"Чат: новых сообщений {len(received)}" + ("; " + summary if summary else "; разрешённых реакций нет"),
+            summary = "; ".join(f"{item.get('label', group)}: {item['authors']}/{item['total']} ({item['ratio']:.0%})" for group, item in progress.items() if item["authors"])
+            self.event(session, "info", "chat_observed", f"Чат: новых сообщений {len(received)}" + ("; " + summary if summary else "; подходящих реакций нет"),
                        {"messages": [{"author": message.name, "text": message.text[:300]} for message in received],
                         "groups": progress, "minimum_authors": room.chat.settings.min_authors, "minimum_ratio": room.chat.settings.author_ratio})
         # While other profiles are still entering, the total can already include

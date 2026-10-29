@@ -91,6 +91,7 @@ class Lesson(Model):
 
 
 class ChatSettings(Model):
+    repeat_identical: bool = True
     window_seconds: int = Field(default=60, ge=5, le=600)
     min_authors: int = Field(default=5, ge=2, le=100)
     author_ratio: float = Field(default=.6, gt=0, le=1)

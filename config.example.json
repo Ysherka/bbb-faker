@@ -5,7 +5,8 @@
     "max_connections": 15,
     "timezone": "Europe/Samara",
     "headless": false,
-    "dry_run": true
+    "dry_run": true,
+    "chat": {"repeat_identical": true}
   },
   "people": [
     {"id": "ivan", "name": "Иван Иванов", "enabled": true},
