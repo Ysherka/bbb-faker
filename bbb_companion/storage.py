@@ -51,8 +51,14 @@ class Storage:
         self.db.commit()
         self.config_error: str | None = None
         try:
-            self.config = Config.model_validate_json(self.config_path.read_text(encoding="utf-8-sig")) if self.config_path.exists() else Config()
-            if not self.config_path.exists():
+            if self.config_path.exists():
+                raw = json.loads(self.config_path.read_text(encoding="utf-8-sig"))
+                self.config = Config.model_validate(raw)
+                if raw.get("version", 1) != self.config.version:
+                    self.save_config(self.config)
+                    self.event("info", "config_upgraded", "Конфигурация обновлена до версии 2; предыдущая копия сохранена в config.backup.json")
+            else:
+                self.config = Config()
                 atomic_write(self.config_path, self.config.model_dump_json(indent=2))
         except Exception as exc:
             self.config = Config()

@@ -5,6 +5,7 @@ import json
 import os
 import re
 import time
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from .demo import Observation
@@ -38,48 +39,131 @@ class MeetingEnded(RuntimeError):
     """The server explicitly ended the meeting; reconnection is inappropriate."""
 
 
+@dataclass
+class SubjectBrowser:
+    key: str
+    browser: object
+    visible: bool
+    pid: int | None = None
+    members: list = field(default_factory=list)
+    selected: object | None = None
+    displayed: object | None = None
+
+
 class BrowserPool:
     def __init__(self):
         self.playwright = None
-        self.browsers = {}
+        self.groups = {}
         self.lock = asyncio.Lock()
+        self.stopping = False
 
-    async def context(self, headless=True):
+    @property
+    def browsers(self):
+        return {key: group.browser for key, group in self.groups.items()}
+
+    async def open(self, adapter):
         async with self.lock:
             if self.playwright is None:
                 from playwright.async_api import async_playwright
                 self.playwright = await async_playwright().start()
-            # Windows uses one headed browser per connection. A hidden native
-            # window can be restored without losing WebRTC/audio/session state.
-            independent = os.name == "nt"
-            key = object() if independent else headless
-            browser = self.browsers.get(key)
-            if browser is None or not browser.is_connected():
+            key = adapter.subject_id
+            group = self.groups.get(key)
+            if group is None or not group.browser.is_connected():
                 browser = await self.playwright.chromium.launch(
-                    headless=False if independent else headless,
-                    args=["--window-position=-32000,-32000"] if independent and headless else [],
+                    headless=False if os.name == "nt" else adapter.headless,
+                    args=["--window-position=-32000,-32000"] if os.name == "nt" else [],
                 )
-                self.browsers[key] = browser
-            context = await browser.new_context(locale="ru-RU", viewport={"width": 1440, "height": 1000})
+                group = SubjectBrowser(key, browser, not adapter.headless)
+                self.groups[key] = group
+                if BrowserWindow.supported:
+                    cdp = await browser.new_browser_cdp_session()
+                    try:
+                        processes = await cdp.send("SystemInfo.getProcessInfo")
+                        group.pid = next(p["id"] for p in processes["processInfo"] if p["type"] == "browser")
+                    finally:
+                        await cdp.detach()
+            adapter.group = group
+            context = await group.browser.new_context(locale="ru-RU", viewport={"width": 1440, "height": 1000})
+            adapter.context = context
+            group.members.append(adapter)
             # No microphone/camera permissions are granted.
             context.set_default_timeout(10000)
-            return context
+            await context.expose_binding("__bbbOutputMuted", lambda source: not adapter.output_enabled)
+            await context.add_init_script(OUTPUT_AUDIO_SCRIPT.replace("__MUTED__", "true"))
+            before = set(BrowserWindow(group.pid).handles()) if group.pid else set()
+            adapter.page = await context.new_page()
+            if group.pid:
+                # Each isolated context gets a native incognito window. Capture
+                # its handle while creation is serialized, then show only one.
+                for _ in range(40):
+                    created = set(BrowserWindow(group.pid).handles()) - before
+                    if created:
+                        adapter.window = BrowserWindow(group.pid, next(iter(created)))
+                        adapter.window.set_visible(False)
+                        break
+                    await asyncio.sleep(.05)
+                else:
+                    raise RuntimeError("Не найдено окно нового контекста Chromium")
+            await self._apply_visibility(group)
 
-    async def release(self, context):
+    async def _apply_visibility(self, group):
+        live = [a for a in group.members if a.page and not a.page.is_closed()]
+        if group.selected not in live:
+            group.selected = live[0] if live else None
+        for member in live:
+            selected = group.visible and not self.stopping and member is group.selected
+            if member.window:
+                if selected and group.displayed is not member:
+                    cdp = await member.context.new_cdp_session(member.page)
+                    try:
+                        info = await cdp.send("Browser.getWindowForTarget")
+                        await cdp.send("Browser.setWindowBounds", {"windowId": info["windowId"], "bounds": {"windowState": "normal"}})
+                        await cdp.send("Browser.setWindowBounds", {"windowId": info["windowId"], "bounds": {"left": 80, "top": 60, "width": 1280, "height": 900}})
+                    finally:
+                        await cdp.detach()
+                if not selected or group.displayed is not member:
+                    member.window.set_visible(selected)
+            try:
+                await member.page.evaluate("muted => window.__bbbSetOutputMuted?.(muted)", not selected)
+            except Exception as exc:
+                # The exposed binding reapplies the current choice on reload.
+                if not any(word in str(exc) for word in ("Execution context was destroyed", "Cannot find context", "Target page, context or browser has been closed")):
+                    raise
+        group.displayed = group.selected if group.visible and not self.stopping else None
+
+    async def set_visible(self, adapter, visible):
         async with self.lock:
-            browser = context.browser
-            await context.close()
-            if browser and browser.is_connected() and not browser.contexts:
-                await browser.close()
-                self.browsers = {key: value for key, value in self.browsers.items() if value is not browser}
+            group = adapter.group
+            if not group or not group.browser.is_connected() or not adapter.window:
+                raise ValueError("Окно предмета пока недоступно")
+            group.visible = visible
+            group.displayed = None
+            await self._apply_visibility(group)
+
+    async def release(self, adapter, context):
+        async with self.lock:
+            group = adapter.group
+            if group and adapter in group.members:
+                group.members.remove(adapter)
+            try:
+                await context.close()
+            finally:
+                if group:
+                    if not group.members:
+                        await group.browser.close()
+                        if self.groups.get(group.key) is group:
+                            del self.groups[group.key]
+                    elif group.browser.is_connected():
+                        await self._apply_visibility(group)
 
     async def close(self):
-        for browser in self.browsers.values():
+        self.stopping = True
+        for group in list(self.groups.values()):
             try:
-                await browser.close()
+                await group.browser.close()
             except Exception:
                 pass
-        self.browsers.clear()
+        self.groups.clear()
         if self.playwright:
             await self.playwright.stop()
             self.playwright = None
@@ -88,12 +172,12 @@ class BrowserPool:
 class BrowserAdapter:
     """DOM adapter. Current upstream selectors; must be verified on the target deployment."""
 
-    def __init__(self, pool: BrowserPool, url: str, name: str, headless: bool):
+    def __init__(self, pool: BrowserPool, url: str, name: str, headless: bool, subject_id: str | None = None):
         self.pool, self.url, self.name, self.headless = pool, url, name, headless
         self.context = self.page = None
+        self.subject_id = subject_id or url
+        self.group = None
         self.window = None
-        self.browser_visible = not headless
-        self.window_supported = BrowserWindow.supported
         self.seen = set()
         self.seen_order = []
         self.script = Path(__file__).with_name("observe.js").read_text(encoding="utf-8")
@@ -102,6 +186,14 @@ class BrowserAdapter:
         self.progress_started = 0
         self.last_submit = 0
         self.last_audio_action = 0
+
+    @property
+    def browser_visible(self):
+        return self.group.visible if self.group else False
+
+    @property
+    def output_enabled(self):
+        return bool(self.group and not self.pool.stopping and self.group.visible and self.group.selected is self)
 
     async def first_visible(self, selectors):
         for selector in selectors:
@@ -113,25 +205,7 @@ class BrowserAdapter:
         return None
 
     async def connect(self):
-        self.context = await self.pool.context(self.headless)
-        await self.context.expose_binding("__bbbOutputMuted", lambda source: not self.browser_visible)
-        await self.context.add_init_script(OUTPUT_AUDIO_SCRIPT.replace("__MUTED__", "true" if self.headless else "false"))
-        self.page = await self.context.new_page()
-        if self.window_supported:
-            cdp = await self.context.browser.new_browser_cdp_session()
-            try:
-                processes = await cdp.send("SystemInfo.getProcessInfo")
-                pid = next(p["id"] for p in processes["processInfo"] if p["type"] == "browser")
-            finally:
-                await cdp.detach()
-            self.window = BrowserWindow(pid)
-            # The first hidden page starts off screen, so no lecture contents
-            # flash on the desktop before SW_HIDE is applied.
-            for attempt in range(40):
-                if self.window.handles():
-                    break
-                await asyncio.sleep(.05)
-            await self.set_visible(self.browser_visible)
+        await self.pool.open(self)
         await self.page.goto(self.url, wait_until="domcontentloaded", timeout=45000)
         self.progress_started = time.monotonic()
         while True:
@@ -144,24 +218,7 @@ class BrowserAdapter:
             await asyncio.sleep(.5)
 
     async def set_visible(self, visible: bool):
-        if not self.window_supported or not self.window:
-            raise ValueError("Управление окном доступно после запуска Chromium в Windows")
-        if visible:
-            # Hidden launches start off screen; CDP also restores usable bounds.
-            cdp = await self.context.new_cdp_session(self.page)
-            try:
-                info = await cdp.send("Browser.getWindowForTarget")
-                await cdp.send("Browser.setWindowBounds", {"windowId": info["windowId"],
-                               "bounds": {"windowState": "normal"}})
-                await cdp.send("Browser.setWindowBounds", {"windowId": info["windowId"],
-                               "bounds": {"left": 80, "top": 60, "width": 1280, "height": 900}})
-            finally:
-                await cdp.detach()
-        self.window.set_visible(visible)
-        self.browser_visible = visible
-        # The context binding supplies the current value again after navigation.
-        self.headless = not visible
-        await self.page.evaluate("muted => window.__bbbSetOutputMuted?.(muted)", not visible)
+        await self.pool.set_visible(self, visible)
 
     async def snapshot(self):
         try:
@@ -303,4 +360,7 @@ class BrowserAdapter:
             context = self.context
             self.context = self.page = None
             self.ready = False
-            await self.pool.release(context)
+            try:
+                await self.pool.release(self, context)
+            finally:
+                self.window = self.group = None

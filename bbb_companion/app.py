@@ -39,6 +39,11 @@ class StartupCommand(BaseModel):
     enabled: bool
 
 
+class SubjectBrowserCommand(BaseModel):
+    subject_id: str
+    visible: bool
+
+
 class DemoCommand(BaseModel):
     action: Literal["start", "wave", "count", "disconnect", "reconnect", "end"]
     count: int = Field(default=2, ge=0, le=200)
@@ -182,11 +187,19 @@ def create_app(data_dir: Path, *, run_engine=True, desktop=None):
             raise HTTPException(400, str(exc)) from exc
         return {"ok": True}
 
+    @app.post("/api/subject-browser")
+    async def subject_browser(command: SubjectBrowserCommand):
+        try:
+            await engine.subject_browser(command.subject_id, command.visible)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return {"ok": True}
+
     @app.post("/api/demo")
     async def demo(command: DemoCommand):
         if command.action == "start":
-            if not 1 <= command.count <= 5:
-                raise HTTPException(400, "Выберите от одного до пяти профилей")
+            if not 1 <= command.count <= 15:
+                raise HTTPException(400, "Выберите от одного до пятнадцати профилей")
             try:
                 await engine.start_demo(command.count)
             except ValueError as exc:

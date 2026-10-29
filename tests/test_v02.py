@@ -102,8 +102,8 @@ def test_week_and_import_preview_are_validated_and_atomic(tmp_path):
 def test_independent_native_windows_toggle_without_rejoining():
     async def scenario(url):
         pool = BrowserPool()
-        first = BrowserAdapter(pool, url, 'Иван', True)
-        second = BrowserAdapter(pool, url, 'Пётр', True)
+        first = BrowserAdapter(pool, url, 'Иван', True, 'math')
+        second = BrowserAdapter(pool, url, 'Пётр', True, 'physics')
         try:
             await first.connect()
             await second.connect()

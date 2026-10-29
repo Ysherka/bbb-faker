@@ -56,7 +56,7 @@ class Move(Model):
 class Lesson(Model):
     id: Identifier
     subject_id: Identifier
-    person_ids: list[Identifier] = Field(min_length=1, max_length=5)
+    person_ids: list[Identifier] = Field(min_length=1, max_length=15)
     start: Time
     end: Time
     weekdays: list[int] = Field(default_factory=list)
@@ -128,7 +128,7 @@ class LeaveSettings(Model):
 class Settings(Model):
     automation_enabled: bool = False
     timezone: Literal["Europe/Samara"] = "Europe/Samara"
-    max_connections: int = Field(default=5, ge=1, le=5)
+    max_connections: int = Field(default=15, ge=1, le=15)
     early_minutes: int = Field(default=2, ge=0, le=30)
     wait_minutes: int = Field(default=20, ge=1, le=180)
     grace_minutes: int = Field(default=60, ge=0, le=180)
@@ -142,11 +142,21 @@ class Settings(Model):
 
 
 class Config(Model):
-    version: Literal[1] = 1
+    version: Literal[2] = 2
     settings: Settings = Field(default_factory=Settings)
     people: list[Person] = Field(default_factory=list, max_length=100)
     subjects: list[Subject] = Field(default_factory=list, max_length=100)
     lessons: list[Lesson] = Field(default_factory=list, max_length=1000)
+
+    @model_validator(mode="before")
+    @classmethod
+    def upgrade_v1(cls, value):
+        if isinstance(value, dict) and value.get("version", 1) == 1:
+            value = {**value, "version": 2}
+            settings = value.get("settings")
+            if isinstance(settings, dict) and settings.get("max_connections") == 5:
+                value["settings"] = {**settings, "max_connections": 15}
+        return value
 
     @model_validator(mode="after")
     def references(self):

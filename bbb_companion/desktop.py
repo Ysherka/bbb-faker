@@ -8,6 +8,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from . import __version__
+
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 
 
@@ -61,8 +63,9 @@ class BrowserWindow:
     """Only touches top-level Chromium windows owned by this connection's PID."""
     supported = os.name == "nt"
 
-    def __init__(self, process_id: int):
+    def __init__(self, process_id: int, handle=None):
         self.process_id = process_id
+        self.handle = handle
 
     def handles(self):
         if not self.supported:
@@ -81,7 +84,8 @@ class BrowserWindow:
             user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
             name = ctypes.create_unicode_buffer(256)
             user32.GetClassNameW(hwnd, name, len(name))
-            if pid.value == self.process_id and name.value.startswith("Chrome_WidgetWin_"):
+            if (pid.value == self.process_id and name.value.startswith("Chrome_WidgetWin_")
+                    and (self.handle is None or hwnd == self.handle)):
                 windows.append(hwnd)
             return True
 
@@ -112,7 +116,7 @@ class Tray:
         draw.rounded_rectangle((16, 17, 48, 43), radius=4, outline="white", width=4)
         draw.line((25, 51, 39, 51), fill="white", width=4)
         draw.line((32, 43, 32, 51), fill="white", width=4)
-        self.icon = pystray.Icon("BBBCompanion", image, "BBB Companion 0.2.0", pystray.Menu(
+        self.icon = pystray.Icon("BBBCompanion", image, f"BBB Companion {__version__}", pystray.Menu(
             pystray.MenuItem("Открыть настройки", lambda: open_panel(), default=True),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Завершить приложение", lambda: shutdown()),

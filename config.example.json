@@ -1,7 +1,8 @@
 {
-  "version": 1,
+  "version": 2,
   "settings": {
     "automation_enabled": false,
+    "max_connections": 15,
     "timezone": "Europe/Samara",
     "headless": false,
     "dry_run": true

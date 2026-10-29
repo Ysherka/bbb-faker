@@ -10,8 +10,8 @@ from pathlib import Path
 def main():
     root = Path(__file__).resolve().parent.parent
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--app-dir', type=Path, default=root / 'dist/releases/0.2.0/BBBCompanion')
-    parser.add_argument('--output', type=Path, default=root / 'dist/github/bbb-faker-0.2.0-windows.zip')
+    parser.add_argument('--app-dir', type=Path, default=root / 'dist/releases/0.2.1/BBBCompanion')
+    parser.add_argument('--output', type=Path, default=root / 'dist/github/bbb-faker-0.2.1-windows.zip')
     args = parser.parse_args()
     app_dir, output = args.app_dir.resolve(), args.output.resolve()
     if output.is_relative_to(app_dir):

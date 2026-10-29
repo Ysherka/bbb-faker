@@ -96,6 +96,7 @@ class Engine:
 
     async def stop(self):
         self.running = False
+        self.pool.stopping = True
         if self.loop_task:
             await self.loop_task
         # Close contexts first to release any pending navigation/audio waits.
@@ -190,7 +191,7 @@ class Engine:
                             room = self.demo_rooms.setdefault(session.room_key, DemoRoom())
                             session.adapter = DemoAdapter(room, session.snapshot["person"]["name"], session.id)
                         else:
-                            session.adapter = BrowserAdapter(self.pool, subject["url"], session.snapshot["person"]["name"], settings.headless)
+                            session.adapter = BrowserAdapter(self.pool, subject["url"], session.snapshot["person"]["name"], settings.headless, subject["id"])
                         async with session.lock:
                             result = await session.adapter.connect()
                     elif not ready:
@@ -387,16 +388,21 @@ class Engine:
         elif action == "diagnostics":
             await self.diagnostics(session)
         elif action in {"show_browser", "hide_browser"}:
-            if not session.adapter or not getattr(session.adapter, "window", None):
-                raise ValueError("Окно этого подключения пока недоступно")
-            async with session.lock:
-                await session.adapter.set_visible(action == "show_browser")
-            # Preserve the user's choice if this session has to reconnect.
-            session.snapshot["settings"]["headless"] = action != "show_browser"
-            self.storage.update_snapshot(session.id, session.snapshot)
-            self.event(session, "info", "browser_visibility", "Окно браузера показано" if action == "show_browser" else "Окно браузера скрыто")
+            await self.subject_browser(session.snapshot["subject"]["id"], action == "show_browser")
         else:
             raise ValueError("Неизвестная команда")
+
+    async def subject_browser(self, subject_id, visible):
+        members = [s for s in self.active() if s.snapshot["subject"]["id"] == subject_id]
+        leader = next((s for s in members if getattr(s.adapter, "window", None)), None)
+        if not leader:
+            raise ValueError("Окно предмета пока недоступно")
+        await leader.adapter.set_visible(visible)
+        # Persist for every member, including sessions not yet connected.
+        for member in members:
+            member.snapshot["settings"]["headless"] = not visible
+            self.storage.update_snapshot(member.id, member.snapshot)
+        self.event(leader, "info", "browser_visibility", "Окно предмета показано" if visible else "Окно предмета скрыто")
 
     async def diagnostics(self, session, automatic=False):
         if not session.adapter:
@@ -410,6 +416,8 @@ class Engine:
             self.event(session, "warning", "diagnostics_error", f"Не удалось сохранить диагностику: {exc}")
 
     async def start_demo(self, count=2):
+        if not 1 <= count <= 15:
+            raise ValueError("Выберите от одного до пятнадцати профилей")
         if len(self.active()) + count > self.storage.config.settings.max_connections:
             raise ValueError("Недостаточно свободных подключений; завершите другие сессии")
         key = "demo://sandbox"
@@ -428,7 +436,18 @@ class Engine:
         self.storage.event("info", "demo_started", f"Локальная демонстрация: {count} профилей. Внешние сайты не открываются")
 
     def status(self):
-        return {"sessions": [s.public() for s in self.sessions.values()],
+        subjects = {}
+        for session in self.active():
+            subject = session.snapshot["subject"]
+            entry = subjects.setdefault(subject["id"], {"subject_id": subject["id"], "title": subject["title"],
+                "connections": 0, "window_supported": False, "browser_visible": False, "viewing_as": None})
+            entry["connections"] += 1
+            if getattr(session.adapter, "window", None):
+                entry["window_supported"] = True
+                entry["browser_visible"] = session.adapter.browser_visible
+                group = session.adapter.group
+                entry["viewing_as"] = group.selected.name if group and group.selected else None
+        return {"sessions": [s.public() for s in self.sessions.values()], "subject_browsers": list(subjects.values()),
                 "rooms": {key: room.leave.status for key, room in self.rooms.items()},
                 "automation_enabled": self.storage.config.settings.automation_enabled,
                 "config_error": self.storage.config_error,
